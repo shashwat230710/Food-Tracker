@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Barcode Expiry Tracker</title>
+    <!-- 1. Tailwind CSS for styling -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 2. html5-qrcode library for barcode scanning -->
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    
+    <style>
+        /* Custom style for the scanner region */
+        #reader {
+            width: 100%;
+            border: 2px dashed #cbd5e1;
+            border-radius: 0.5rem;
+        }
+        #reader__dashboard_section_csr > div > button {
+            background-color: #3b82f6 !important;
+            color: white !important;
+            padding: 8px 12px !important;
+            border-radius: 0.375rem !important;
+            font-weight: 600 !important;
+        }
+        #reader__dashboard_section_swaplink {
+            display: none !important;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans antialiased">
+
+    <!-- Main Application Container -->
+    <div id="app" class="max-w-2xl mx-auto p-4 sm:p-6 lg:p-8">
+        <h1 class="text-3xl font-bold text-center text-blue-700 mb-6">
+            Product Expiry Tracker
+        </h1>
+
+        <!-- Notification Area for toasts -->
+        <div id="notification-area" class="fixed top-5 right-5 space-y-3 z-50 w-72"></div>
+
+        <!-- Scanner Section -->
+        <section id="scanner-section" class="bg-white p-6 rounded-xl shadow-lg mb-6">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">1. Scan Barcode</h2>
+            <!-- This div is where the scanner will be rendered -->
+            <div id="reader" class="overflow-hidden"></div>
+            <div id="scanner-controls" class="mt-4 flex gap-4">
+                <button id="start-scan-btn" class="flex-1 bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-blue-700 transition duration-300">
+                    Start Scan
+                </button>
+                <button id="stop-scan-btn" class="flex-1 bg-gray-500 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-gray-600 transition duration-300" style="display: none;">
+                    Stop Scan
+                </button>
+            </div>
+        </section>
+
+        <!-- Product Form Section -->
+        <section id="form-section" class="bg-white p-6 rounded-xl shadow-lg mb-6">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">2. Add Product Details</h2>
+            <form id="product-form" class="space-y-4">
+                <div>
+                    <label for="barcode" class="block text-sm font-medium text-gray-700">Barcode</label>
+                    <input type="text" id="barcode" name="barcode" readonly
+                           class="mt-1 block w-full p-2 bg-gray-100 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <div>
+                    <label for="product-name" class="block text-sm font-medium text-gray-700">Product Name</label>
+                    <input type="text" id="product-name" name="product-name" required
+                           class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
+                           placeholder="e.g., Milk Carton">
+                </div>
+                <div>
+                    <label for="exp-date" class="block text-sm font-medium text-gray-700">Expiration Date</label>
+                    <input type="date" id="exp-date" name="exp-date" required
+                           class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500">
+                </div>
+                <button type="submit"
+                        class="w-full bg-green-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md hover:bg-green-700 transition duration-300">
+                    Save Product
+                </button>
+            </form>
+        </section>
+
+        <!-- Product List Section -->
+        <section id="list-section" class="bg-white p-6 rounded-xl shadow-lg">
+            <h2 class="text-xl font-semibold text-gray-800 mb-4">3. Saved Products</h2>
+            <p class="text-xs text-gray-600 mb-4">
+                User ID: <span id="user-id" class="font-mono">Loading...</span>
+            </p>
+            <div id="product-list" class="space-y-3">
+                <!-- Products will be dynamically inserted here -->
+                <p id="list-state" class="text-gray-500 text-center py-4">Loading products...</p>
+            </div>
+        </section>
+    </div>
+
+    <!-- 3. Firebase SDKs -->
+    <script type="module">
+        // Import Firebase modules
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            doc, 
+            addDoc, 
+            deleteDoc, 
+            collection, 
+            query, 
+            onSnapshot, 
+            setLogLevel 
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- GLOBAL VARIABLES ---
+        let db, auth, userId, appId;
+        let html5QrCode;
+        let isScannerRunning = false;
+        
+        // This is the collection name in Firestore
+        const PRODUCTS_COLLECTION = "products";
+
+        // --- FIREBASE & APP INITIALIZATION ---
+
+        /**
+         * Initializes the Firebase app and authentication.
+         */
+        function initializeFirebase() {
+            // Set log level for debugging
+            setLogLevel('Debug');
+            
+            /* * This is the correct place to put your Firebase config and a custom appId
+             * for local testing.
+            */
+
+            // Your web app's Firebase configuration
+            const firebaseConfig = {
+              apiKey: "AIzaSyAL7yjrKH_7VwRs4k8WBYdO4e-6c_qvNwc",
+              authDomain: "food-tracker-9041c.firebaseapp.com",
+              projectId: "food-tracker-9041c",
+              storageBucket: "food-tracker-9041c.firebasestorage.app",
+              messagingSenderId: "78171598563",
+              appId: "1:78171598563:web:d626c6986815fcbd979fd6",
+              measurementId: "G-T35V2F3VE0"
+            };
+            
+            // We must set a custom app ID string here.
+            appId = "food-tracker-9041c"; // Or any custom string is fine
+            
+            // Initialize Firebase
+            const app = initializeApp(firebaseConfig);
+            // const analytics = getAnalytics(app); // We don't need analytics for this app
+
+            // Get app ID from (hidden) global variable, or use a default
+            // appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // OLD CODE
+            
+            // Get Firebase config from (hidden) global variable
+            /* OLD CODE - We replaced this by pasting your config above
+            if (typeof __firebase_config === 'undefined') {
+                console.error("Firebase config is missing.");
+                showToast("Error: App config missing. Cannot connect to database.", "error");
+                return;
+            }
+            const firebaseConfig = JSON.parse(__firebase_config);
+            */
+            
+            // Initialize Firebase App
+            // const app = initializeApp(firebaseConfig); // OLD CODE
+            db = getFirestore(app);
+            auth = getAuth(app);
+            
+            // Listen for authentication state changes
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    // User is signed in
+                    userId = user.uid;
+                    document.getElementById('user-id').textContent = userId;
+                    console.log("User authenticated. User ID:", userId);
+                    // Now that we are authenticated, initialize the rest of the app
+                    initApp();
+                } else {
+                    // User is signed out, try to sign in
+                    console.log("User not authenticated. Attempting sign in...");
+                    await attemptSignIn();
+                }
+            });
+        }
+
+        /**
+         * Attempts to sign in with a custom token if available, otherwise signs in anonymously.
+         */
+        async function attemptSignIn() {
+            try {
+                /* This part was correctly modified by you for local testing.
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    // Sign in with the provided custom token
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                    console.log("Signed in with custom token.");
+                } else {
+                */
+                    // Fallback to anonymous sign-in
+                    await signInAnonymously(auth);
+                    console.log("Signed in anonymously.");
+                // }
+            } catch (error) {
+                console.error("Authentication Error:", error);
+                showToast(`Authentication Failed: ${error.message}`, "error");
+            }
+        }
+
+        /**
+         * Initializes the main application logic after authentication.
+         */
+        function initApp() {
+            // Initialize the QR Code scanner
+            html5QrCode = new Html5Qrcode("reader");
+            
+            // Setup event listeners for buttons and form
+            setupEventListeners();
+            
+            // Load products from Firestore
+            loadProducts();
+        }
+
+        // --- EVENT LISTENERS ---
+
+        /**
+         * Sets up all the click and submit event handlers.
+         */
+        function setupEventListeners() {
+            const productForm = document.getElementById('product-form');
+            const startScanBtn = document.getElementById('start-scan-btn');
+            const stopScanBtn = document.getElementById('stop-scan-btn');
+
+            // Handle form submission
+            productForm.addEventListener('submit', handleSaveProduct);
+            
+            // Handle scanner controls
+            startScanBtn.addEventListener('click', startScanner);
+            stopScanBtn.addEventListener('click', stopScanner);
+        }
+
+        // --- BARCODE SCANNER ---
+
+        /**
+         * Starts the camera and barcode scanner.
+         */
+        function startScanner() {
+            if (isScannerRunning) return;
+
+            const config = { fps: 10, qrbox: { width: 250, height: 150 } };
+            
+            // Success and error callbacks
+            const onScanSuccess = (decodedText, decodedResult) => {
+                console.log(`Scan result: ${decodedText}`, decodedResult);
+                document.getElementById('barcode').value = decodedText;
+                showToast("Barcode Scanned!", "success");
+                stopScanner(); // Stop scanning after a successful scan
+            };
+
+            const onScanFailure = (error) => {
+                // This is called frequently, so we don't log it unless debugging
+                // console.warn(`Code scan error = ${error}`);
+            };
+
+            html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess, onScanFailure)
+                .then(() => {
+                    isScannerRunning = true;
+                    document.getElementById('start-scan-btn').style.display = 'none';
+                    document.getElementById('stop-scan-btn').style.display = 'block';
+                    showToast("Scanner Started", "info");
+                })
+                .catch(err => {
+                    console.error("Failed to start scanner:", err);
+                    showToast("Error: Could not start camera.", "error");
+                });
+        }
+
+        /**
+         * Stops the camera and barcode scanner.
+         */
+        function stopScanner() {
+            if (!isScannerRunning) return;
+
+            html5QrCode.stop()
+                .then(() => {
+                    isScannerRunning = false;
+                    document.getElementById('start-scan-btn').style.display = 'block';
+                    document.getElementById('stop-scan-btn').style.display = 'none';
+                    showToast("Scanner Stopped", "info");
+                })
+                .catch(err => {
+                    console.error("Failed to stop scanner:", err);
+                });
+        }
+
+        // --- FIRESTORE DATA HANDLING ---
+
+        /**
+         * Handles the form submission to save a new product.
+         */
+        async function handleSaveProduct(e) {
+            e.preventDefault(); // Prevent default form reload
+            
+            const barcode = document.getElementById('barcode').value;
+            const productName = document.getElementById('product-name').value;
+            const expDate = document.getElementById('exp-date').value;
+
+            // Basic validation
+            if (!productName || !expDate) {
+                showToast("Please fill in Product Name and Expiration Date.", "error");
+                return;
+            }
+            /*
+            if (!barcode) {
+                showToast("Please scan a barcode first.", "error");
+                return;
+            }
+            */
+            
+            try {
+                // Construct the path to the user's private collection
+                const collectionPath = `/artifacts/${appId}/users/${userId}/${PRODUCTS_COLLECTION}`;
+                const collectionRef = collection(db, collectionPath);
+                
+                // Add the new product document
+                const docRef = await addDoc(collectionRef, {
+                    barcode: barcode,
+                    name: productName,
+                    expDate: expDate, // Stored as 'YYYY-MM-DD' string
+                    createdAt: new Date().toISOString()
+                });
+                
+                console.log("Product saved with ID:", docRef.id);
+                showToast("Product saved successfully!", "success");
+                
+                // Clear the form
+                e.target.reset();
+
+            } catch (error) {
+                console.error("Error saving product:", error);
+                showToast(`Error saving product: ${error.message}`, "error");
+            }
+        }
+        
+        /**
+         * Sets up a real-time listener to load and display products.
+         */
+        function loadProducts() {
+            // Construct the path to the user's private collection
+            const collectionPath = `/artifacts/${appId}/users/${userId}/${PRODUCTS_COLLECTION}`;
+            const collectionRef = collection(db, collectionPath);
+            
+            // Create a query (though we're not ordering, this is good practice)
+            const q = query(collectionRef);
+            
+            // Attach the snapshot listener
+            onSnapshot(q, (querySnapshot) => {
+                const productList = document.getElementById('product-list');
+                const listState = document.getElementById('list-state');
+                
+                // Clear the current list
+                productList.innerHTML = ''; 
+                
+                if (querySnapshot.empty) {
+                    listState.textContent = "No products saved yet. Add one!";
+                    productList.appendChild(listState);
+                    return;
+                }
+
+                let expiringProducts = [];
+
+                querySnapshot.docs.forEach((doc) => {
+                    const product = doc.data();
+                    const productId = doc.id;
+                    
+                    // Check expiration status
+                    const expState = getExpirationState(product.expDate);
+                    
+                    // Add to notifications if expiring soon or expired
+                    if (expState.state === 'warning') {
+                        expiringProducts.push({ name: product.name, days: expState.daysRemaining, type: 'warning' });
+                    } else if (expState.state === 'expired') {
+                        expiringProducts.push({ name: product.name, days: expState.daysRemaining, type: 'expired' });
+                    }
+                    
+                    // Create and append the product item to the list
+                    const productElement = createProductElement(productId, product, expState);
+                    productList.appendChild(productElement);
+                });
+
+                // Display notifications for expiring products
+                displayExpirationAlerts(expiringProducts);
+                
+            }, (error) => {
+                console.error("Error loading products:", error);
+                showToast(`Error loading products: ${error.message}`, "error");
+                listState.textContent = "Error loading products.";
+            });
+        }
+        
+        /**
+         * Creates an HTML element for a single product.
+         */
+        function createProductElement(id, product, expState) {
+            const item = document.createElement('div');
+            
+            // Apply styling based on expiration state
+            let itemClasses = 'p-4 rounded-lg shadow-md flex flex-col sm:flex-row sm:justify-between sm:items-center gap-3 transition duration-300 ';
+            let dateTextClass = 'text-gray-700';
+            
+            if (expState.state === 'expired') {
+                itemClasses += 'bg-red-100 border border-red-300';
+                dateTextClass = 'text-red-700 font-semibold';
+            } else if (expState.state === 'warning') {
+                itemClasses += 'bg-yellow-100 border border-yellow-300';
+                dateTextClass = 'text-yellow-700 font-semibold';
+            } else {
+                itemClasses += 'bg-white';
+            }
+            item.className = itemClasses;
+
+            let expText = `Expires: ${product.expDate}`;
+            if (expState.state === 'warning') {
+                expText = `Expires in ${expState.daysRemaining} ${expState.daysRemaining === 1 ? 'day' : 'days'}`;
+            } else if (expState.state === 'expired') {
+                expText = `Expired ${Math.abs(expState.daysRemaining)} ${Math.abs(expState.daysRemaining) === 1 ? 'day' : 'days'} ago`;
+            }
+
+            item.innerHTML = `
+                <div class="flex-1">
+                    <p class="text-lg font-semibold text-gray-900">${product.name}</p>
+                    <p class="text-sm ${dateTextClass}">${expText}</p>
+                    <p class="text-xs text-gray-500 font-mono mt-1">BC: ${product.barcode}</p>
+                </div>
+                <button data-id="${id}" class="delete-btn bg-red-500 text-white font-semibold py-1 px-3 rounded-md shadow-sm hover:bg-red-600 transition duration-300 self-start sm:self-center">
+                    Delete
+                </button>
+            `;
+            
+            // Add click listener to the delete button
+            item.querySelector('.delete-btn').addEventListener('click', () => handleDeleteProduct(id));
+            
+            return item;
+        }
+
+        /**
+         * Deletes a product from Firestore.
+         */
+        async function handleDeleteProduct(id) {
+            /* * Removed the `confirm()` call. 
+             * In this sandboxed environment, `confirm()` dialogs are blocked
+             * and can cause the app to stop responding.
+             * We will proceed with deletion immediately.
+             *
+             * If you want a confirmation, a custom modal UI would be needed.
+             */
+            
+            try {
+                // Construct the path to the specific document
+                const docPath = `/artifacts/${appId}/users/${userId}/${PRODUCTS_COLLECTION}/${id}`;
+                const docRef = doc(db, docPath);
+                
+                await deleteDoc(docRef);
+                
+                showToast("Product deleted.", "success");
+                console.log("Product deleted:", id);
+                
+            } catch (error) {
+                console.error("Error deleting product:", error);
+                showToast(`Error deleting product: ${error.message}`, "error");
+            }
+        }
+
+        // --- UTILITY FUNCTIONS ---
+
+        /**
+         * Calculates the expiration state of a product.
+         * @param {string} expDateStr - The expiration date in 'YYYY-MM-DD' format.
+         * @returns {object} - { state: 'ok' | 'warning' | 'expired', daysRemaining: number }
+         */
+        function getExpirationState(expDateStr) {
+            if (!expDateStr) return { state: 'ok', daysRemaining: 9999 };
+
+            const today = new Date();
+            const expDate = new Date(expDateStr + 'T00:00:00'); // Ensure it's compared at start of day
+
+            // Reset time part of today for accurate day difference
+            today.setHours(0, 0, 0, 0);
+
+            const diffTime = expDate.getTime() - today.getTime();
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+            if (diffDays < 0) {
+                return { state: 'expired', daysRemaining: diffDays };
+            } else if (diffDays <= 7) {
+                return { state: 'warning', daysRemaining: diffDays };
+            } else {
+                return { state: 'ok', daysRemaining: diffDays };
+            }
+        }
+        
+        /**
+         * Shows toast messages for expiring/expired products.
+         */
+        function displayExpirationAlerts(products) {
+            products.forEach(p => {
+                if (p.type === 'warning') {
+                    showToast(`Warning: ${p.name} is expiring in ${p.days} ${p.days === 1 ? 'day' : 'days'}!`, 'warning');
+                } else if (p.type === 'expired') {
+                    showToast(`Alert: ${p.name} has expired!`, 'error');
+                }
+            });
+        }
+        
+        /**
+         * Displays a toast notification.
+         * @param {string} message - The message to display.
+         * @param {'info' | 'success' | 'warning' | 'error'} type - The type of toast.
+         */
+        function showToast(message, type = 'info') {
+            const area = document.getElementById('notification-area');
+            const toast = document.createElement('div');
+            
+            let bgColor; // <-- FIX: Changed 'letbgColor;' to 'let bgColor;'
+            switch (type) {
+                case 'success': bgColor = 'bg-green-600'; break;
+                case 'warning': bgColor = 'bg-yellow-500'; break;
+                case 'error': bgColor = 'bg-red-600'; break;
+                default: bgColor = 'bg-blue-600';
+            }
+            
+            toast.className = `p-4 rounded-lg shadow-xl text-white ${bgColor} transform transition-all duration-300 ease-in-out opacity-0 translate-x-10`;
+            toast.textContent = message;
+            
+            area.appendChild(toast);
+            
+            // Animate in
+            setTimeout(() => {
+                toast.classList.remove('opacity-0', 'translate-x-10');
+            }, 10); // Short delay to allow element to be added to DOM
+            
+            // Auto-dismiss after 5 seconds
+            setTimeout(() => {
+                toast.classList.add('opacity-0', 'translate-x-10');
+                // Remove from DOM after animation
+                setTimeout(() => {
+                    toast.remove();
+                }, 300);
+            }, 5000);
+        }
+
+        // --- START THE APP ---
+        // Initialize Firebase when the script loads
+        initializeFirebase();
+
+    </script>
+</body>
+</html>
+
+
+
