@@ -87,6 +87,17 @@
             <p class="text-xs text-gray-600 mb-4">
                 User ID: <span id="user-id" class="font-mono">Loading...</span>
             </p>
+            
+            <!-- NEW: Sort Buttons -->
+            <div class="flex gap-2 mb-4">
+                <button id="sort-expiry-btn" class="flex-1 bg-blue-600 text-white font-semibold py-2 px-3 rounded-lg shadow-md hover:bg-blue-700 transition duration-300 text-sm">
+                    Sort by Expiry
+                </button>
+                <button id="sort-name-btn" class="flex-1 bg-gray-300 text-gray-800 font-semibold py-2 px-3 rounded-lg shadow-md hover:bg-gray-400 transition duration-300 text-sm">
+                    Sort by Name
+                </button>
+            </div>
+            
             <div id="product-list" class="space-y-3">
                 <!-- Products will be dynamically inserted here -->
                 <p id="list-state" class="text-gray-500 text-center py-4">Loading products...</p>
@@ -115,6 +126,9 @@
         let html5QrCode;
         let isScannerRunning = false;
         
+        let allProducts = []; // Stores the master list of products
+        let currentSort = 'expiry'; // Default sort order
+        
         // This is the collection name in Firestore
         const PRODUCTS_COLLECTION = "products";
 
@@ -127,11 +141,7 @@
             // Set log level for debugging
             setLogLevel('Debug');
             
-            /* * This is the correct place to put your Firebase config and a custom appId
-             * for local testing.
-            */
-
-            // Your web app's Firebase configuration
+            // This is your Firebase config for local testing.
             const firebaseConfig = {
               apiKey: "AIzaSyAL7yjrKH_7VwRs4k8WBYdO4e-6c_qvNwc",
               authDomain: "food-tracker-9041c.firebaseapp.com",
@@ -142,28 +152,11 @@
               measurementId: "G-T35V2F3VE0"
             };
             
-            // We must set a custom app ID string here.
-            appId = "food-tracker-9041c"; // Or any custom string is fine
+            // Set a custom appId for the database path
+            appId = "food-tracker-9041c"; 
             
             // Initialize Firebase
             const app = initializeApp(firebaseConfig);
-            // const analytics = getAnalytics(app); // We don't need analytics for this app
-
-            // Get app ID from (hidden) global variable, or use a default
-            // appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id'; // OLD CODE
-            
-            // Get Firebase config from (hidden) global variable
-            /* OLD CODE - We replaced this by pasting your config above
-            if (typeof __firebase_config === 'undefined') {
-                console.error("Firebase config is missing.");
-                showToast("Error: App config missing. Cannot connect to database.", "error");
-                return;
-            }
-            const firebaseConfig = JSON.parse(__firebase_config);
-            */
-            
-            // Initialize Firebase App
-            // const app = initializeApp(firebaseConfig); // OLD CODE
             db = getFirestore(app);
             auth = getAuth(app);
             
@@ -185,22 +178,15 @@
         }
 
         /**
-         * Attempts to sign in with a custom token if available, otherwise signs in anonymously.
+         * Attempts to sign in anonymously.
          */
         async function attemptSignIn() {
             try {
-                /* This part was correctly modified by you for local testing.
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    // Sign in with the provided custom token
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                    console.log("Signed in with custom token.");
-                } else {
-                */
-                    // Fallback to anonymous sign-in
-                    await signInAnonymously(auth);
-                    console.log("Signed in anonymously.");
-                // }
-            } catch (error) {
+                // We no longer have a custom token, so we *must* sign in anonymously.
+                await signInAnonymously(auth);
+                console.log("Signed in anonymously.");
+            }
+            catch (error) {
                 console.error("Authentication Error:", error);
                 showToast(`Authentication Failed: ${error.message}`, "error");
             }
@@ -229,6 +215,10 @@
             const productForm = document.getElementById('product-form');
             const startScanBtn = document.getElementById('start-scan-btn');
             const stopScanBtn = document.getElementById('stop-scan-btn');
+            
+            // NEW: Sort button listeners
+            const sortExpiryBtn = document.getElementById('sort-expiry-btn');
+            const sortNameBtn = document.getElementById('sort-name-btn');
 
             // Handle form submission
             productForm.addEventListener('submit', handleSaveProduct);
@@ -236,6 +226,39 @@
             // Handle scanner controls
             startScanBtn.addEventListener('click', startScanner);
             stopScanBtn.addEventListener('click', stopScanner);
+
+            // NEW: Handle sort button clicks
+            sortExpiryBtn.addEventListener('click', () => setSortOrder('expiry'));
+            sortNameBtn.addEventListener('click', () => setSortOrder('name'));
+        }
+        
+        // --- NEW: SORTING LOGIC ---
+        
+        /**
+         * Sets the current sort order and re-renders the list.
+         * @param {'expiry' | 'name'} sortType - The sort order to apply.
+         */
+        function setSortOrder(sortType) {
+            currentSort = sortType;
+            
+            const sortExpiryBtn = document.getElementById('sort-expiry-btn');
+            const sortNameBtn = document.getElementById('sort-name-btn');
+
+            // Update button styles to show active state
+            if (sortType === 'expiry') {
+                sortExpiryBtn.classList.replace('bg-gray-300', 'bg-blue-600');
+                sortExpiryBtn.classList.replace('text-gray-800', 'text-white');
+                sortNameBtn.classList.replace('bg-blue-600', 'bg-gray-300');
+                sortNameBtn.classList.replace('text-white', 'text-gray-800');
+            } else if (sortType === 'name') {
+                sortNameBtn.classList.replace('bg-gray-300', 'bg-blue-600');
+                sortNameBtn.classList.replace('text-gray-800', 'text-white');
+                sortExpiryBtn.classList.replace('bg-blue-600', 'bg-gray-300');
+                sortExpiryBtn.classList.replace('text-white', 'text-gray-800');
+            }
+            
+            // Re-render the list with the new sort order
+            renderProductList();
         }
 
         // --- BARCODE SCANNER ---
@@ -309,12 +332,6 @@
                 showToast("Please fill in Product Name and Expiration Date.", "error");
                 return;
             }
-            /*
-            if (!barcode) {
-                showToast("Please scan a barcode first.", "error");
-                return;
-            }
-            */
             
             try {
                 // Construct the path to the user's private collection
@@ -342,59 +359,88 @@
         }
         
         /**
-         * Sets up a real-time listener to load and display products.
+         * Sets up a real-time listener to load products.
+         * This function now ONLY populates the `allProducts` array.
          */
         function loadProducts() {
             // Construct the path to the user's private collection
             const collectionPath = `/artifacts/${appId}/users/${userId}/${PRODUCTS_COLLECTION}`;
             const collectionRef = collection(db, collectionPath);
             
-            // Create a query (though we're not ordering, this is good practice)
             const q = query(collectionRef);
             
             // Attach the snapshot listener
             onSnapshot(q, (querySnapshot) => {
-                const productList = document.getElementById('product-list');
-                const listState = document.getElementById('list-state');
                 
-                // Clear the current list
-                productList.innerHTML = ''; 
+                // 1. Clear the master list
+                allProducts = []; 
                 
-                if (querySnapshot.empty) {
-                    listState.textContent = "No products saved yet. Add one!";
-                    productList.appendChild(listState);
-                    return;
-                }
-
-                let expiringProducts = [];
-
+                // 2. Repopulate the master list from Firebase
                 querySnapshot.docs.forEach((doc) => {
-                    const product = doc.data();
-                    const productId = doc.id;
-                    
-                    // Check expiration status
-                    const expState = getExpirationState(product.expDate);
-                    
-                    // Add to notifications if expiring soon or expired
-                    if (expState.state === 'warning') {
-                        expiringProducts.push({ name: product.name, days: expState.daysRemaining, type: 'warning' });
-                    } else if (expState.state === 'expired') {
-                        expiringProducts.push({ name: product.name, days: expState.daysRemaining, type: 'expired' });
-                    }
-                    
-                    // Create and append the product item to the list
-                    const productElement = createProductElement(productId, product, expState);
-                    productList.appendChild(productElement);
+                    allProducts.push({
+                        id: doc.id,
+                        ...doc.data()
+                    });
                 });
-
-                // Display notifications for expiring products
-                displayExpirationAlerts(expiringProducts);
+                
+                // 3. Call the renderer to display the (sorted) list
+                renderProductList(); 
                 
             }, (error) => {
                 console.error("Error loading products:", error);
                 showToast(`Error loading products: ${error.message}`, "error");
-                listState.textContent = "Error loading products.";
+                document.getElementById('list-state').textContent = "Error loading products.";
             });
+        }
+        
+        /**
+         * NEW: Renders the product list based on `allProducts` and `currentSort`.
+         */
+        function renderProductList() {
+            const productList = document.getElementById('product-list');
+            const listState = document.getElementById('list-state');
+            
+            // Clear the current list
+            productList.innerHTML = ''; 
+
+            if (allProducts.length === 0) {
+                listState.textContent = "No products saved yet. Add one!";
+                productList.appendChild(listState);
+                return;
+            }
+
+            // 1. Create a sorted copy of the products
+            let sortedProducts = [...allProducts]; // Create a copy
+            
+            if (currentSort === 'expiry') {
+                // Sort by expDate (string 'YYYY-MM-DD'). Ascending.
+                sortedProducts.sort((a, b) => a.expDate.localeCompare(b.expDate));
+            } else if (currentSort === 'name') {
+                // Sort by name. Case-insensitive.
+                sortedProducts.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+            }
+
+            // 2. Process and render the sorted list
+            let expiringProducts = [];
+
+            sortedProducts.forEach((product) => {
+                // Check expiration status
+                const expState = getExpirationState(product.expDate);
+                
+                // Add to notifications if expiring soon or expired
+                if (expState.state === 'warning') {
+                    expiringProducts.push({ name: product.name, days: expState.daysRemaining, type: 'warning' });
+                } else if (expState.state === 'expired') {
+                    expiringProducts.push({ name: product.name, days: expState.daysRemaining, type: 'expired' });
+                }
+                
+                // Create and append the product item to the list
+                const productElement = createProductElement(product.id, product, expState);
+                productList.appendChild(productElement);
+            });
+
+            // Display notifications for expiring products
+            displayExpirationAlerts(expiringProducts);
         }
         
         /**
@@ -449,9 +495,6 @@
             /* * Removed the `confirm()` call. 
              * In this sandboxed environment, `confirm()` dialogs are blocked
              * and can cause the app to stop responding.
-             * We will proceed with deletion immediately.
-             *
-             * If you want a confirmation, a custom modal UI would be needed.
              */
             
             try {
@@ -520,7 +563,7 @@
             const area = document.getElementById('notification-area');
             const toast = document.createElement('div');
             
-            let bgColor; // <-- FIX: Changed 'letbgColor;' to 'let bgColor;'
+            let bgColor;
             switch (type) {
                 case 'success': bgColor = 'bg-green-600'; break;
                 case 'warning': bgColor = 'bg-yellow-500'; break;
@@ -555,6 +598,4 @@
     </script>
 </body>
 </html>
-
-
 
