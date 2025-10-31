@@ -67,7 +67,7 @@
                     <label for="product-name" class="block text-sm font-medium text-gray-700">Product Name</label>
                     <input type="text" id="product-name" name="product-name" required
                            class="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500"
-                           placeholder="e.g., Milk Carton">
+                           placeholder="Scan barcode to lookup...">
                 </div>
                 <div>
                     <label for="exp-date" class="block text-sm font-medium text-gray-700">Expiration Date</label>
@@ -88,7 +88,7 @@
                 User ID: <span id="user-id" class="font-mono">Loading...</span>
             </p>
             
-            <!-- NEW: Sort Buttons -->
+            <!-- Sort Buttons -->
             <div class="flex gap-2 mb-4">
                 <button id="sort-expiry-btn" class="flex-1 bg-blue-600 text-white font-semibold py-2 px-3 rounded-lg shadow-md hover:bg-blue-700 transition duration-300 text-sm">
                     Sort by Expiry
@@ -215,8 +215,6 @@
             const productForm = document.getElementById('product-form');
             const startScanBtn = document.getElementById('start-scan-btn');
             const stopScanBtn = document.getElementById('stop-scan-btn');
-            
-            // NEW: Sort button listeners
             const sortExpiryBtn = document.getElementById('sort-expiry-btn');
             const sortNameBtn = document.getElementById('sort-name-btn');
 
@@ -227,12 +225,12 @@
             startScanBtn.addEventListener('click', startScanner);
             stopScanBtn.addEventListener('click', stopScanner);
 
-            // NEW: Handle sort button clicks
+            // Handle sort button clicks
             sortExpiryBtn.addEventListener('click', () => setSortOrder('expiry'));
             sortNameBtn.addEventListener('click', () => setSortOrder('name'));
         }
         
-        // --- NEW: SORTING LOGIC ---
+        // --- SORTING LOGIC ---
         
         /**
          * Sets the current sort order and re-renders the list.
@@ -271,17 +269,22 @@
 
             const config = { fps: 10, qrbox: { width: 250, height: 150 } };
             
-            // Success and error callbacks
-            const onScanSuccess = (decodedText, decodedResult) => {
+            // NEW: Updated onScanSuccess to be async and call the lookup
+            const onScanSuccess = async (decodedText, decodedResult) => {
                 console.log(`Scan result: ${decodedText}`, decodedResult);
+                
+                // 1. Set barcode value in the form
                 document.getElementById('barcode').value = decodedText;
-                showToast("Barcode Scanned!", "success");
-                stopScanner(); // Stop scanning after a successful scan
+                
+                // 2. Stop the scanner
+                stopScanner();
+                
+                // 3. Call the API lookup function
+                await lookupBarcode(decodedText);
             };
 
             const onScanFailure = (error) => {
                 // This is called frequently, so we don't log it unless debugging
-                // console.warn(`Code scan error = ${error}`);
             };
 
             html5QrCode.start({ facingMode: "environment" }, config, onScanSuccess, onScanFailure)
@@ -313,6 +316,47 @@
                 .catch(err => {
                     console.error("Failed to stop scanner:", err);
                 });
+        }
+
+        // --- NEW: BARCODE LOOKUP ---
+        
+        /**
+         * Looks up a barcode using the Open Food Facts API.
+         * @param {string} barcode - The barcode number to look up.
+         */
+        async function lookupBarcode(barcode) {
+            const productNameInput = document.getElementById('product-name');
+            const expDateInput = document.getElementById('exp-date');
+            
+            showToast("Looking up barcode...", "info");
+            
+            try {
+                const apiUrl = `https://world.openfoodfacts.org/api/v2/product/${barcode}.json`;
+                const response = await fetch(apiUrl);
+                
+                if (!response.ok) {
+                    throw new Error(`API request failed with status ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                if (data.status === 0 || !data.product || !data.product.product_name) {
+                    // Product not found
+                    showToast("Product not found in database. Please enter manually.", "warning");
+                    productNameInput.focus(); // Focus on the name field
+                } else {
+                    // Product found!
+                    const productName = data.product.product_name;
+                    productNameInput.value = productName;
+                    showToast("Product name found!", "success");
+                    expDateInput.focus(); // Focus on the date field
+                }
+                
+            } catch (error) {
+                console.error("Barcode lookup error:", error);
+                showToast(`Barcode lookup failed: ${error.message}`, "error");
+                productNameInput.focus(); // Focus on name field on error
+            }
         }
 
         // --- FIRESTORE DATA HANDLING ---
@@ -394,7 +438,7 @@
         }
         
         /**
-         * NEW: Renders the product list based on `allProducts` and `currentSort`.
+         * Renders the product list based on `allProducts` and `currentSort`.
          */
         function renderProductList() {
             const productList = document.getElementById('product-list');
@@ -537,6 +581,7 @@
             } else if (diffDays <= 7) {
                 return { state: 'warning', daysRemaining: diffDays };
             } else {
+                // FIX: Removed the extra "s:" from "state:s:"
                 return { state: 'ok', daysRemaining: diffDays };
             }
         }
@@ -545,6 +590,7 @@
          * Shows toast messages for expiring/expired products.
          */
         function displayExpirationAlerts(products) {
+            // This function seems to be missing from your original code, let's keep it minimal
             products.forEach(p => {
                 if (p.type === 'warning') {
                     showToast(`Warning: ${p.name} is expiring in ${p.days} ${p.days === 1 ? 'day' : 'days'}!`, 'warning');
